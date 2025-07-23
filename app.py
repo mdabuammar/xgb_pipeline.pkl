@@ -1,12 +1,14 @@
 import streamlit as st
 import pandas as pd
 import joblib
+import shap
+import matplotlib.pyplot as plt
 
-# Load the trained XGBoost pipeline
-xgb_pipeline = joblib.load("xgb_pipeline.pkl")  # Make sure this file is in the same folder
+# Load pipeline
+xgb_pipeline = joblib.load("xgb_pipeline.pkl")
 
-# Features used during training
-feature_names = [
+# Feature list (must match training)
+features = [
     'Hours_Studied', 'Attendance', 'Extracurricular_Activities', 'Previous_Scores',
     'Tutoring_Sessions', 'Family_Income', 'Peer_Influence', 'Distance_from_Home',
     'Parental_Involvement_Low', 'Parental_Involvement_Medium', 'Access_to_Resources_Low',
@@ -16,21 +18,49 @@ feature_names = [
     'Motivation_Level_Score', 'Study_Effort', 'Engagement_Index', 'Attendance_Tutoring_Interaction'
 ]
 
-st.title("📚 Student Performance Prediction App")
-st.write("Predict a student's academic performance using socio-academic features.")
+# Streamlit UI
+st.title("🎓 Student Performance Predictor with SHAP Insights")
+st.write("Predict performance and get top suggestions for improvement.")
 
-# Create input fields
+# Input widgets
 user_input = {}
-for feature in feature_names:
-    if any(x in feature for x in ['Low', 'Medium', 'High', 'Public', 'Male']):
-        user_input[feature] = st.checkbox(f"{feature}", value=False)
+for col in features:
+    if any(key in col for key in ['Low', 'Medium', 'High', 'Male', 'Public']):
+        user_input[col] = st.checkbox(f"{col}", value=False)
     else:
-        user_input[feature] = st.number_input(f"{feature}", min_value=0.0, max_value=100.0, step=0.1, value=0.0)
+        user_input[col] = st.number_input(f"{col}", 0.0, 100.0, step=0.1, value=0.0)
 
-# Convert to DataFrame
 input_df = pd.DataFrame([user_input])
 
-# Predict
-if st.button("🔮 Predict Performance"):
-    prediction = xgb_pipeline.predict(input_df)[0]
-    st.success(f"🎯 Predicted Category: **{prediction}**")
+# Prediction and SHAP
+if st.button("🔍 Predict and Explain"):
+    pred = xgb_pipeline.predict(input_df)[0]
+    st.success(f"🎯 Predicted Category: **{pred}**")
+
+    # SHAP Explanation
+    explainer = shap.TreeExplainer(xgb_pipeline.named_steps['xgb'])
+    shap_values = explainer.shap_values(input_df)
+
+    st.subheader("📊 SHAP Feature Importance (Bar Plot)")
+    fig, ax = plt.subplots()
+    shap.summary_plot(shap_values, input_df, plot_type="bar", show=False)
+    st.pyplot(fig)
+
+    # Prescription
+    def generate_prescription(index, X_sample, shap_values, top_k=3):
+        student_data = X_sample.iloc[index]
+        shap_vals = shap_values[index]
+        impact_df = pd.DataFrame({
+            'Feature': X_sample.columns,
+            'Value': student_data.values,
+            'SHAP_Impact': shap_vals
+        })
+        impact_df['Abs_Impact'] = impact_df['SHAP_Impact'].abs()
+        top_features = impact_df.sort_values(by='Abs_Impact', ascending=False).head(top_k)
+
+        st.subheader("🧠 Prescription for the Student")
+        for _, row in top_features.iterrows():
+            direction = "increase" if row['SHAP_Impact'] < 0 else "maintain/improve"
+            st.markdown(f"📌 **{row['Feature']}**: *{direction}* (Current: `{row['Value']}`) — Impact: `{row['SHAP_Impact']:.2f}`")
+
+    generate_prescription(0, input_df, shap_values)
